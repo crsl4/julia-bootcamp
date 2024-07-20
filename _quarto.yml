@@ -1,0 +1,61 @@
+project:
+  type: website
+  title: "Julia bootcamp"
+  execute-dir: project
+  output-dir: docs
+  render: 
+      - index.qmd
+      - about.qmd
+      # - session1-get-started.qmd
+      # - session2a-tables-and-arrow.qmd
+      # - session2b-interval-overlap.qmd
+      # - session2b-alt.qmd
+      # - session3a-linear-mixed-effects.qmd
+      # - session3b-glmm.qmd
+      # - session4-exercise.qmd
+      # - session5-other-tools.qmd
+      # - session6-conclusions.qmd
+
+website:
+  title: "Julia bootcamp"
+  site-url: https://crsl4.github.io/julia-bootcamp
+  repo-url: https://github.com/crsl4/julia-bootcamp
+  repo-actions: [issue]
+  navbar:
+    background: primary
+    left:
+      - href: index.qmd
+        text: Home
+      - about.qmd
+    right:
+      - icon: github
+        href: https://github.com/crsl4/julia-bootcamp
+  sidebar:
+    style: "docked"
+    search: true
+    contents:
+      - index.qmd
+      # - session1-get-started.qmd
+      # - session2a-tables-and-arrow.qmd
+      # - session2b-interval-overlap.qmd
+      # - session2b-alt.qmd
+      # - session3a-linear-mixed-effects.qmd
+      # - session3b-glmm.qmd
+      # - session4-exercise.qmd
+      # - session5-other-tools.qmd
+      # - session6-conclusions.qmd
+  page-navigation: true
+
+
+format:
+  html:
+    theme: cosmo
+    css: styles.css
+    toc: true
+
+callout-appearance: simple
+
+date: last-modified
+date-format: iso
+
+engine: julia
