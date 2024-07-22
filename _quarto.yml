@@ -6,6 +6,7 @@ project:
   render: 
       - index.qmd
       - about.qmd
+      - 2-glm-implementation.qmd
       # - session1-get-started.qmd
       # - session2a-tables-and-arrow.qmd
       # - session2b-interval-overlap.qmd
@@ -35,6 +36,7 @@ website:
     search: true
     contents:
       - index.qmd
+      - 2-glm-implementation.qmd
       # - session1-get-started.qmd
       # - session2a-tables-and-arrow.qmd
       # - session2b-interval-overlap.qmd
