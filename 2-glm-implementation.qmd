@@ -77,7 +77,9 @@ TidierPlots_set("plot_log", false)
 
 ### Read and examine the admissions data
 
-Import a data table on admissions to grad school according to GPA and GRE score stored as an [Arrow](https://arrow.apache.org) IPC file, and convert it to a dataframe.
+We include, as an [Arrow](https://arrow.apache.org) IPC file, data from a study on admissions to graduate school according to GRE score, GPA and ranking of undergraduate institution (see e.g. [this analysis using R](https://rstudio-pubs-static.s3.amazonaws.com/1126440_da124ef3eb4241ef9b18811de2e51c42.html)).
+
+Import the data table and convert it to a dataframe.
 
 ```{julia}
 admit = DataFrame(Arrow.Table("./data/admit.arrow"))
@@ -147,14 +149,14 @@ typeof(m1)
 which, in this case, is a parameterized `struct` with several named fields.
 ```julia
 struct Glm{DL<:DistLink,T<:AbstractFloat} <: StatsModels.RegressionModel
-    form::Union{Nothing,FormulaTerm}
-    X::AbstractMatrix{T}
-    Xqr::Matrix{T}                # copy of X used for the QR decomposition
-    ytbl::MatrixTable{Matrix{T}}
-    Whalf::Diagonal{T}            # rtwwt as a Diagonal matrix
-    β::Vector{T}
-    βcp::Vector{T}
-    deviances::Vector{T}
+    form::Union{Nothing,FormulaTerm}  # model formula (or nothing)
+    X::Matrix{T}                      # model matrix
+    Xqr::Matrix{T}                    # copy of X used for the QR decomposition
+    ytbl::MatrixTable{Matrix{T}}      # table of response, linear predictor, etc.
+    Whalf::Diagonal{T}                # rtwwt as a Diagonal matrix
+    β::Vector{T}                      # coefficient vector
+    βcp::Vector{T}                    # copy of previous coefficient vector
+    deviances::Vector{T}              # deviance at each iteration of IRLS
 end
 ```
 
@@ -201,24 +203,19 @@ producing the mean response vector, $\boldsymbol{\mu}$.
 These vectors, along with an optional *offset*, the *unit deviances*, the square roots of the *working weights* and the *weighted, working responses* are stored in the `ytbl` property.
 
 ```{julia}
-Table(m1.ytbl) # the "Table" call is for pretty-printing
+Table(m1.ytbl) # wrapping in `Table()` provides for pretty-printing
 ```
 
-:::{.callout-note collapse="true"}
-
-#### `wwresp` is close to a (-1,1) recoding of `y`
-
-Notice that the weighted, working responses are close to a recoding of $\mathbf{y}$ as $\pm 1$.
-Whenever $y$ is zero, the `wwresp` is a bit less than -1.0 and whenever $y$ is one, the `wwresp` is a bit more than 1.
-
-:::
+```{julia}
+describe(DataFrame(m1.ytbl), :min, :median, :max, :mean)
+```
 
 ## Iterative step in the IRLS algorithm
 
 The iterative step in the IRLS algorithm evaluates a new parameter vector, $\boldsymbol{\beta}$ from the current `ytbl` then updates the derived columns in `ytbl`.
 If $\tilde{\mathbf{y}}$ is the current working response and $\mathbf{W}$ is the $n\times n$ diagonal matrix of working weights then the next coefficient vector is the solution to
 $$
-\mathbf{X'WX}\boldsymbol{\beta}=\mathbf{X'Wy}
+\mathbf{X'WX}\boldsymbol{\beta}=\mathbf{X'W}\tilde{\mathbf{y}}
 $$
 
 evaluated using a QR decomposition of $\mathbf{W}^{1/2}\mathbf{X}$ and the weighted, working response.
@@ -293,3 +290,18 @@ Less than half the time of the $\boldsymbol{\beta}$ update is spent in the updat
 
 which is bad news for me because I had all sorts of ideas of how to make this faster, and it is not important to make it faster.
 It turns out that the QR decomposition accounts for the majority of the time spent and all of the allocations.
+
+## Points to notice
+
+1. Julia is a *functional language* - in the sense that operations are described by defining and calling *functions*.
+2. Julia has many built-in data structures, including
+  - *bitstypes* - numbers, boolean values, characters (UTF-8)
+  - *arrays*, *tuples*, *named tuples*, *dictionaries*, *character strings*
+  - user-defined *struct* or *mutable structs*
+  - data structures defined in packages (e.g. Tables, DataFrames)
+3. A combination of a function name and an argument *signature* defines a *method*.
+4. A particular function may have dozens of methods.  Check, e.g. `methods(mul!)`
+5. Methods are selected according to the *signature* of the arguments, called *multiple dispatch*, not just *single dispatch* on the type of the first argument.
+6. Methods (or, more precisely, *method instances*) are compiled down to machine code by a *Just In Time* compiler.
+7. The first time a method instance is required execution can be comparatively slow because of the compilation.  Subsequent invokations can be very rapid.
+8. **Don't fear the loop**.  Loops can run at the speed of a loop in a compiled language.  There are many looping constructs available in Julia - don't be afraid of using them if appropriate.
