@@ -1,0 +1,307 @@
+---
+title: GLM implementation
+author: 
+  - name: Douglas Bates
+    email: dmbates@gmail.com
+    orcid: 0000-0001-8316-9503
+    affiliation:
+      - name: University of Wisconsin - Madison
+        city: Madison
+        state: WI
+        url: https://www.wisc.edu
+        department: Statistics
+fig-format: png
+engine: julia
+julia:
+  exeflags: [ "-tauto", "--project"]
+execute: 
+  freeze: auto
+---
+
+## Purpose
+
+In this section we show some code from a package to fit Generalized Linear Models (GLMs).
+The purpose is to highlight some of the capabilities of Julia that allow for concise and performant implementations of algorithms.
+
+In particular we show:
+
+  - Parameterized structs
+  - Multiple dispatch
+  - Mutating functions that avoid memory allocation
+  - Benchmarking
+  - The `Tables` interface for row- or column-oriented tables
+
+## Load the packages to be used
+
+### Installing the GLMMng package
+
+The [GLMMng](https://github.com/dmbates/GLMMng.jl) package is primarily a test-bed for me to try out some ideas and is not in the global Julia registry.
+It must be installed from the url of the git repository.
+
+```julia-repl
+(julia-bootcamp) pkg> add https://github.com/dmbates/GLMMng.jl
+     Cloning git-repo `https://github.com/dmbates/GLMMng.jl`
+    Updating git-repo `https://github.com/dmbates/GLMMng.jl`
+   Resolving package versions...
+    Updating `~/git/julia-bootcamp/Project.toml`
+  [7db52ce6] + GLMMng v0.2.0 `https://github.com/dmbates/GLMMng.jl#main`
+    Updating `~/git/julia-bootcamp/Manifest.toml`
+  [7db52ce6] + GLMMng v0.2.0 `https://github.com/dmbates/GLMMng.jl#main`
+  [0a7d04aa] + PRIMA v0.2.0
+⌅ [c3b1956e] + TypeUtils v0.3.8
+  [eead6e0c] + PRIMA_jll v0.7.1+0
+        Info Packages marked with ⌅ have new versions available but compatibility constraints restrict them from upgrading. To see why use `status --outdated -m`
+Precompiling project...
+  1 dependency successfully precompiled in 2 seconds. 269 already precompiled.
+```
+
+Load the packages to be used
+
+```{julia}
+#| code-fold: show
+using Arrow       # read and write the Arrow IPC file format
+using Chairmarks  # a new-age package for benchmarking
+using DataFrames  # flexible and featureful dataframe implementation
+using GLMMng      # fit and examine Generalized Linear (Mixed) Models
+using TidierPlots # ggplot2-like graphics system
+using TypedTables # lightweight, performant column-oriented tables
+```
+
+and set some options for the graphics system
+
+```{julia}
+#| output: false
+TidierPlots_set("plot_show", false)
+TidierPlots_set("plot_log", false)
+```
+
+### Read and examine the admissions data
+
+We include, as an [Arrow](https://arrow.apache.org) IPC file, data from a study on admissions to graduate school according to GRE score, GPA and ranking of undergraduate institution (see e.g. [this analysis using R](https://rstudio-pubs-static.s3.amazonaws.com/1126440_da124ef3eb4241ef9b18811de2e51c42.html)).
+
+Import the data table and convert it to a dataframe.
+
+```{julia}
+admit = DataFrame(Arrow.Table("./data/admit.arrow"))
+```
+
+Summarize the data
+
+```{julia}
+describe(admit, :min, :median, :mean, :max, :nmissing, :eltype)
+```
+
+As shown in @fig-admitvsgre, the smoothed proportion admitted is more-or-less linear in the GRE score.
+
+```{julia}
+#| code-fold: show
+#| label: fig-admitvsgre
+#| fig-cap: Scatterplot smoother curve of admission versus GRE score
+ggplot(admit) + geom_smooth(aes(x = :gre, y = :admit)) +
+labs(x="GRE score", y="Proportion admitted")
+```
+
+However, the smoothed proportion admitted is not terribly linear in GPA, as shown in @fig-admitvsgpa.
+
+```{julia}
+#| code-fold: true
+#| label: fig-admitvsgpa
+#| fig-cap: Scatterplot smoother curve of admission versus GPA
+ggplot(admit) + geom_smooth(aes(x = :gpa, y = :admit)) +
+labs(x="GPA", y="Proportion admitted")
+```
+
+### Fit a simple GLM for the binary response
+
+
+```{julia}
+m1 = let f = @formula(admit ~ 1 + gre + gpa),
+  dl = BernoulliLogit()
+
+  fit(Glm, f, admit, dl)
+end
+```
+
+:::{.callout-note collapse="true"}
+
+#### The `@formula` macro call
+Because the formulas in the formula/data representation of a linear predictor expression do not follow the usual syntax rules for operators like `~`, they must be processed by a macro, written `@formula`, which modifies the textual representation of the expression before it is parsed.
+
+:::
+
+:::{.callout-note collapse="true"}
+
+#### The `let` block
+
+A `let` block allows multiple expressions and assignments to be evaluated in a private namespace.
+In this case we are simply avoiding using long expressions, such as the formula, in the call to the `fit` function.
+
+:::
+
+## Model representation 
+
+In Julia we can always query the type of an object,
+
+```{julia}
+typeof(m1)
+```
+
+which, in this case, is a parameterized `struct` with several named fields.
+```julia
+struct Glm{DL<:DistLink,T<:AbstractFloat} <: StatsModels.RegressionModel
+    form::Union{Nothing,FormulaTerm}  # model formula (or nothing)
+    X::Matrix{T}                      # model matrix
+    Xqr::Matrix{T}                    # copy of X used for the QR decomposition
+    ytbl::MatrixTable{Matrix{T}}      # table of response, linear predictor, etc.
+    Whalf::Diagonal{T}                # rtwwt as a Diagonal matrix
+    β::Vector{T}                      # coefficient vector
+    βcp::Vector{T}                    # copy of previous coefficient vector
+    deviances::Vector{T}              # deviance at each iteration of IRLS
+end
+```
+
+The fields are some of the "properties" that can be extracted from an object using the `.` operator.
+
+```{julia}
+propertynames(m1)
+```
+
+For example, the `deviances` property is a vector of deviance values at each iteration of the IRLS algorithm.
+
+```{julia}
+m1.deviances
+```
+
+We see that the IRLS algorithm has converged after four iterations.
+
+This struct also has a `QR` property with an explicit extractor function defined in the `getproperty` method for the `Glm` type.
+
+```{julia}
+m1.QR.R   # from the QR decomposition of the weighted model matrix
+```
+
+### Some properties of the model
+
+The $\mathbf{X}$ property is the model matrix,
+
+```{julia}
+m1.X
+```
+
+and the $\boldsymbol{\beta}$ property is the coefficient vector
+
+```{julia}
+m1.β
+```
+
+Together they define the **linear predictor**, $\boldsymbol{\eta}=\mathbf{X}\boldsymbol{\beta}$, which is mapped component-wise via the scalar inverse link function, 
+$$
+\mu_i = g^{-1}(\eta_i) = \frac{1}{1 + \exp(-\eta_i)}\quad i=1,\dots, n
+$$
+producing the mean response vector, $\boldsymbol{\mu}$.
+
+These vectors, along with an optional *offset*, the *unit deviances*, the square roots of the *working weights* and the *weighted, working responses* are stored in the `ytbl` property.
+
+```{julia}
+Table(m1.ytbl) # wrapping in `Table()` provides for pretty-printing
+```
+
+```{julia}
+describe(DataFrame(m1.ytbl), :min, :median, :max, :mean)
+```
+
+## Iterative step in the IRLS algorithm
+
+The iterative step in the IRLS algorithm evaluates a new parameter vector, $\boldsymbol{\beta}$ from the current `ytbl` then updates the derived columns in `ytbl`.
+If $\tilde{\mathbf{y}}$ is the current working response and $\mathbf{W}$ is the $n\times n$ diagonal matrix of working weights then the next coefficient vector is the solution to
+$$
+\mathbf{X'WX}\boldsymbol{\beta}=\mathbf{X'W}\tilde{\mathbf{y}}
+$$
+
+evaluated using a QR decomposition of $\mathbf{W}^{1/2}\mathbf{X}$ and the weighted, working response.
+
+```julia
+"""
+    updateβ!(m::Glm)
+
+Utility function that saves the current `m.β` in `m.βcp` and evaluates a new `m.β` via weighted least squares.
+
+After evaluating a new `m.β`, `m.ytbl` is updated
+"""
+function updateβ!(m::Glm{DL}) where {DL}
+    (; X, Xqr, β, βcp, Whalf, ytbl) = m        # destructure m & ytbl
+    (; η, wwresp) = ytbl
+    copyto!(βcp, β)                            # keep a copy of β
+    ldiv!(β, qr!(mul!(Xqr, Whalf, X)), wwresp) # weighted least squares
+    mul!(η, X, β)                              # evaluate linear predictor
+    updateytbl!(ytbl, DL)                      # update the rest of ytbl
+    return m
+end
+```
+
+:::{.callout-note collapse="true"}
+#### Trailing `!` in function names
+
+Julia has a convention of ending the name of a *mutating* function with `!` to indicate that the user should be aware that it can change (or *mutate*) the value of one or more of its arguments, usually the first argument.
+This is only a convention, it has no syntactic meaning.
+
+:::
+
+### Updating the ytbl.
+
+```julia
+"""
+    updateytbl!(tbl::MatrixTable, ::Union{BernoulliLogit,Type{BernoulliLogit})
+
+Update the `μ`, `dev`, `rtwwt`, `wwresp` columns in the `ytbl` (MatrixTable containing y)
+"""
+function updateytbl!(
+    ytbl::MatrixTable{Matrix{T}},
+    ::Union{BernoulliLogit,Type{BernoulliLogit}},
+) where {T<:AbstractFloat}
+    (; y, offset, η, μ, dev, rtwwt, wwresp) = ytbl
+    @inbounds for i in axes(y, 1)
+        ηi = η[i]
+        yi = y[i]
+        rtexpmη = exp(-ηi / 2)           # square root of exp(-ηi)
+        expmη = abs2(rtexpmη)            # exp(-ηi)
+        denom = one(T) + expmη
+        μ[i] = μi = inv(denom)
+        dev[i] = 2 * ((one(T) - yi) * ηi + log1p(expmη))
+        rtwwt[i] = rtwwti = rtexpmη * μi # sqrt of working wt
+        wwres = (yi - μi) / rtwwti       # weighted working resid
+        wwresp[i] = wwres + rtwwti * (ηi - offset[i])
+    end
+    return ytbl
+end
+```
+
+### Benchmarking the iterative step
+
+```{julia}
+@b m1 GLMMng.updateβ!(_)  # benchmark the β update
+```
+
+Less than half the time of the $\boldsymbol{\beta}$ update is spent in the update of `ytbl`.
+
+```{julia}
+@b m1.ytbl GLMMng.updateytbl!(_, BernoulliLogit)
+```
+
+which is bad news for me because I had all sorts of ideas of how to make this faster, and it is not important to make it faster.
+It turns out that the QR decomposition accounts for the majority of the time spent and all of the allocations.
+
+## Points to notice
+
+1. Julia is a *functional language* - in the sense that operations are described by defining and calling *functions*.
+2. Julia has many built-in data structures, including
+  - *bitstypes* - numbers, boolean values, characters (UTF-8)
+  - *arrays*, *tuples*, *named tuples*, *dictionaries*, *character strings*
+  - user-defined *struct* or *mutable structs*
+  - data structures defined in packages (e.g. Tables, DataFrames)
+3. A combination of a function name and an argument *signature* defines a *method*.
+4. A particular function may have dozens of methods.  Check, e.g. `methods(mul!)`
+5. Methods are selected according to the *signature* of the arguments, called *multiple dispatch*, not just *single dispatch* on the type of the first argument.
+6. Methods (or, more precisely, *method instances*) are compiled down to machine code by a *Just In Time* compiler.
+7. The first time a method instance is required execution can be comparatively slow because of the compilation.  Subsequent invokations can be very rapid.
+8. **Don't fear the loop**.  Loops can run at the speed of a loop in a compiled language.  There are many looping constructs available in Julia - don't be afraid of using them if appropriate.
