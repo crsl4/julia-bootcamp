@@ -15,6 +15,18 @@ At the end of the bootcamp, participants will be able to:
   - Efficiently handle datasets (even across different languages) through Tables.jl and Arrow.jl
   - Communicate across languages (Julia, R, Python)
 
+## Schedule
+
+| Date | Topic |
+| -----| ------|
+| Sept 26 | Introduction to Julia |
+| Oct 3 | [Generalized Linear Mixed Models in Julia](https://github.com/crsl4/julia-bootcamp/blob/main/2-glm-implementation.qmd) |
+| Oct 10 |  |
+| Oct 17 |  |
+| Oct 24 |  |
+
+
+ 
 ## In preparation for the bootcamp
 
 Review the first part (Writing) of [Modern Julia Workflows](https://modernjuliaworkflows.github.io), abbreviated `MoJuWo`, which provides a general introduction to setting up a Julia development environment.
